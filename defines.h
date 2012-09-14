@@ -22,4 +22,12 @@
 #define TIDSX 64 // Tids in X
 #define TIDSY 4  // Tids in Y
 
+#define gKinectVideoWidth  640
+#define gKinectVideoHeight 480
+#define gKinectVideo       4
+
+#define gKinectDepthWidth  320
+#define gKinectDepthHeight 240
+#define gKinectDepth       2
+
 #endif

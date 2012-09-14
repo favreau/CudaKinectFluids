@@ -191,7 +191,8 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>kinect10.lib;cudart.lib;cufft.lib;freeglut.lib;glew64.lib;cutil64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kinect10.lib;shrUtils64.lib;oclUtils64.lib;glew64.lib</AdditionalDependencies>
+      <OutputFile>$(OutDir)/oclParticles.exe</OutputFile>
       <AdditionalLibraryDirectories>$(CudaToolkitDir)/lib/$(Platform);../../common/lib/$(Platform);../../../shared/lib/$(Platform);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <ProgramDatabaseFile>

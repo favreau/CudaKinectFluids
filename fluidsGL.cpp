@@ -36,8 +36,20 @@
 #define REFRESH_DELAY	  20 //ms
 #include "KinectWrapper.h"
 KinectWrapper* kinectWrapper = nullptr;
-GLubyte* ubImage = nullptr;
-GLubyte* ubDepth = nullptr;
+BYTE* ubImage = nullptr;
+BYTE* ubDepth = nullptr;
+
+// Timer
+float gTimer = 0.f;
+
+// Param
+float gParam = 110.f;
+float gPointSize = 1.f;
+
+// mouse controls
+float2 gMousePosition;
+float2 gMousePositionOld;
+int mouse_buttons = 0;
 
 #ifdef WIN32
 bool IsOpenGLAvailable(const char *appName) { return true; }
@@ -104,6 +116,8 @@ void reshape(int x, int y);
 #else
 void timerEvent(int value);
 #endif // 0
+void motion(int x, int y);
+void mouse(int button, int state, int x, int y);
 
 // CUFFT plan handle
 cufftHandle planr2c;
@@ -133,7 +147,7 @@ static GLfloat* particuleColors = nullptr;
 unsigned char *bitmapImage = nullptr;  //store image data
 
 static const int WindowsWidth  = 1024;
-static const int WindowsHeight = 1024;
+static const int WindowsHeight = WindowsWidth*9/16;
 static int lastx = WindowsWidth/2, lasty = WindowsHeight/2, lastz = 0;
 
 // Texture pitch
@@ -147,11 +161,18 @@ int  g_TotalErrors     = 0;
 // CheckFBO/BackBuffer class objects
 CheckRender       *g_CheckRender = nullptr;
 
+extern "C" void feelTheAttraction(cData *v, int dimx, int dimy, float3 position, float timer, float param);
+extern "C" void initialize_scene();
+extern "C" void h2d_kinect( BYTE* kinectVideo, BYTE* kinectDepth );
+extern "C" void finalize_scene();
+
+#if 0
 extern "C" void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r);
 extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt);
 extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, float visc);
 extern "C" void updateVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy);
 extern "C" void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt);
+#endif // 0
 
 void initParticlesFromTexture( cData *p, int dx, int dy, const std::string& filename )
 {
@@ -159,7 +180,6 @@ void initParticlesFromTexture( cData *p, int dx, int dy, const std::string& file
    BITMAPFILEHEADER bitmapFileHeader; //our bitmap file header
    BITMAPINFOHEADER bitmapInfoHeader;
    DWORD imageIdx=0;  //image index counter
-   unsigned char tempRGB;  //our swap variable
 
    if( bitmapImage == nullptr )
    {
@@ -244,6 +264,7 @@ void initParticlesFromTexture( cData *p, int dx, int dy, const std::string& file
    }
 }
 
+#if 0
 void simulateFluids(void)
 {
    // simulate fluid
@@ -252,6 +273,7 @@ void simulateFluids(void)
    updateVelocity(dvfield, (float*)vxfield, (float*)vyfield, DIMX, RPADW, DIMY);
    advectParticles(vbo, dvfield, DIMX, DIMY, DT);
 }
+#endif // 0
 
 void TexFunc(void)
 {
@@ -267,6 +289,7 @@ void TexFunc(void)
    float dx = 2.f*0.064f;
    float dy = 2.f*0.048f;
    float dz = 0.f;
+   glBegin(GL_POLYGON);
    glTexCoord2f(1.f, 1.f);
    glVertex3f(0.f, dy, dz);
    glTexCoord2f(0.0, 1.f);
@@ -276,7 +299,6 @@ void TexFunc(void)
    glTexCoord2f(1.f, 0.f);
    glVertex3f(0.f, 0.f, dz);
    glEnd();
-
    glDisable(GL_TEXTURE_2D);
 }
 
@@ -284,12 +306,13 @@ void display(void)
 {  
    if (!g_bQAReadback) {
       cutilCheckError(cutStartTimer(timer));  
-      simulateFluids();
+      //simulateFluids();
    }
 
    // render points from vertex buffer
    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
    
+   //TexFunc();
 
 #if 1
    // Draw particles
@@ -297,18 +320,17 @@ void display(void)
    glEnableClientState(GL_COLOR_ARRAY);
    
    glBindBufferARB(GL_ARRAY_BUFFER_ARB, vbo);
-   glVertexPointer(2, GL_FLOAT, 0, 0);
+   glVertexPointer(3, GL_FLOAT, 0, 0);
    glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
    glColorPointer(3, GL_FLOAT, 0, particuleColors);
 
-   glPointSize(2.f);
+   glPointSize(gPointSize);
    glDrawArrays(GL_POINTS, 0, DS);
    
    glDisableClientState(GL_VERTEX_ARRAY); 
    glDisableClientState(GL_COLOR_ARRAY);
 #endif // 0
 
-   TexFunc();
    glDisableClientState(GL_TEXTURE_COORD_ARRAY); 
    glDisable(GL_TEXTURE_2D);
 
@@ -374,13 +396,25 @@ void keyboard( unsigned char key, int x, int y)
    case 27:
       exit (0);
       break;
+   case '+':
+      gParam += 5.f;
+      printf("%f\n", gParam);
+      break;
+   case '-':
+      gParam -= 5.f;
+      printf("%f\n", gParam);
+      break;
+   case 'p':
+      gPointSize += 1.f;
+      if( gPointSize > 6.f ) gPointSize = 1.f;
+      break;
    case 'r':
       memset(hvfield, 0, sizeof(cData) * DS);
       cudaMemcpy(dvfield, hvfield, sizeof(cData) * DS, 
          cudaMemcpyHostToDevice);
 
       //initParticles(particles, DIMX, DIMY);
-      initParticlesFromTexture(particles, DIMX, DIMY,"./medias/022.bmp");
+      initParticlesFromTexture(particles, DIMX, DIMY,"./medias/021.bmp");
 
       cudaGraphicsUnregisterResource(cuda_vbo_resource);
       cudaGraphicsUnregisterResource(cuda_vbo_color_resource);
@@ -416,6 +450,7 @@ void timerEvent(int value)
       kinectWrapper->getSkeletonPositions( positions );
    }
    
+#if 0
    int dx = WindowsWidth/2;
    int dy = WindowsHeight/2;
    
@@ -452,19 +487,86 @@ void timerEvent(int value)
          lasty = 0.f;
       }
    }
+#else
+   float3 kinectPosition;
+   kinectPosition.x = (
+      positions[NUI_SKELETON_POSITION_HEAD].x +
+      positions[NUI_SKELETON_POSITION_HAND_LEFT].x +
+      positions[NUI_SKELETON_POSITION_HAND_RIGHT].x 
+      ) / 3.f;
+   kinectPosition.y = -(
+      positions[NUI_SKELETON_POSITION_HEAD].y +
+      positions[NUI_SKELETON_POSITION_HAND_LEFT].y +
+      positions[NUI_SKELETON_POSITION_HAND_RIGHT].y
+      ) / 3.f;
+
+   kinectPosition.x = gMousePosition.x / WindowsWidth;
+   kinectPosition.y = gMousePosition.y / WindowsHeight;
+   kinectPosition.z = 0.f;
+
+   h2d_kinect( ubImage, ubDepth );
+   feelTheAttraction( dvfield, DIMX, DIMY, kinectPosition, gTimer, gParam/*+20*cos(gTimer)*/ );
+
+   gTimer += 0.1f;
+#endif // 0
    glutPostRedisplay();
    glutTimerFunc(REFRESH_DELAY, timerEvent,0);
 }
 
-void reshape(int x, int y) {
+void reshape(int x, int y) 
+{
    wWidth = x; wHeight = y;
-   glViewport(0, 0, x, y);
+   glViewport(0,0,x,y);
    glMatrixMode(GL_PROJECTION);
    glLoadIdentity();
    glOrtho(0, 1, 1, 0, 0, 1); 
    glMatrixMode(GL_MODELVIEW);
    glLoadIdentity();
    glutPostRedisplay();
+}
+
+// Mouse event handlers
+//*****************************************************************************
+void mouse(int button, int state, int x, int y)
+{
+	if (state == GLUT_DOWN) 
+	{
+		mouse_buttons |= 1<<button;
+      gMousePosition.x = x - WindowsWidth/2;
+      gMousePosition.y = y - WindowsHeight/2;
+
+      gMousePositionOld = gMousePosition;
+	} 
+	else 
+	{
+		if (state == GLUT_UP) 
+		{
+			mouse_buttons = 0;
+         gMousePosition.x = 0;
+         gMousePosition.y = 0;
+         gMousePositionOld = gMousePosition;
+		}
+	}
+}
+
+void motion(int x, int y)
+{
+	switch( mouse_buttons ) 
+	{
+	case 1:
+      gMousePositionOld = gMousePosition;
+      gMousePosition.x = x - WindowsWidth/2;
+      gMousePosition.y = y - WindowsHeight/2;
+      break;
+	case 2:
+		break;
+	case 4:
+		break;
+   default:
+      gMousePosition.x = 0;
+      gMousePosition.y = 0;
+      gMousePositionOld = gMousePosition;
+	}
 }
 
 void cleanup(void) 
@@ -488,8 +590,8 @@ void cleanup(void)
 
    delete kinectWrapper;
    kinectWrapper = nullptr;
-   delete ubImage;
-   delete ubDepth;
+
+   finalize_scene();
 
    delete bitmapImage;
    delete particuleColors;
@@ -521,10 +623,13 @@ int initGL(int *argc, char **argv)
    glutCreateWindow("Compute Stable Fluids");
    glutDisplayFunc(display);
    glutKeyboardFunc(keyboard);
-#if 0
-   glutMouseFunc(click);
+   
+   //glutMouseFunc(click);
+
+   glutMouseFunc(mouse);
    glutMotionFunc(motion);
-#else
+
+   /*
    // viewport
    glClearColor(0.0, 0.0, 0.0, 1.0);
    glDisable(GL_DEPTH_TEST);
@@ -533,18 +638,15 @@ int initGL(int *argc, char **argv)
    // projection
    glMatrixMode(GL_PROJECTION);
    glLoadIdentity();
-   gluPerspective(60.0, (GLfloat)DIMX / (GLfloat) DIMY, 0.1, 10.0);
-
-   // set view matrix
+   gluPerspective(100.0, (GLfloat)DIMX / (GLfloat) DIMY, 0.1, 5.0);
    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
    glMatrixMode(GL_MODELVIEW);
    glLoadIdentity();
+   */
 
-   glutTimerFunc(REFRESH_DELAY, timerEvent,0);
    //glutFullScreen();
-#endif // 0
+   glutTimerFunc(REFRESH_DELAY, timerEvent,0);
    glutReshapeFunc(reshape);
-
 
    glewInit();
    if (! glewIsSupported(
@@ -602,6 +704,9 @@ int main(int argc, char** argv)
    cutilCheckError(cutCreateTimer(&timer));
    cutilCheckError(cutResetTimer(timer));  
 
+   // Init Cuda
+   initialize_scene();
+
    hvfield = (cData*)malloc(sizeof(cData) * DS);
    memset(hvfield, 0, sizeof(cData) * DS);
 
@@ -626,7 +731,7 @@ int main(int argc, char** argv)
    memset(particles, 0, sizeof(cData) * DS);
 
    //initParticles(particles, DIMX, DIMY);
-   initParticlesFromTexture(particles, DIMX, DIMY,"./medias/022.bmp");
+   initParticlesFromTexture(particles, DIMX, DIMY,"./medias/023.bmp");
 
    // Create CUFFT transform plan configuration
    cufftPlan2d(&planr2c, DIMX, DIMY, CUFFT_R2C);

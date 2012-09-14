@@ -33,10 +33,11 @@
 #include <shrQATest.h>
 
 // Kinect
-#define REFRESH_DELAY	  10 //ms
+#define REFRESH_DELAY	  20 //ms
 #include "KinectWrapper.h"
-KinectWrapper* kinectWrapper = NULL;
-GLubyte* ubImage = NULL;
+KinectWrapper* kinectWrapper = nullptr;
+GLubyte* ubImage = nullptr;
+GLubyte* ubDepth = nullptr;
 
 #ifdef WIN32
 bool IsOpenGLAvailable(const char *appName) { return true; }
@@ -49,8 +50,8 @@ bool IsOpenGLAvailable(const char *appName) { return true; }
 
 bool IsOpenGLAvailable(const char *appName)
 {
-   Display *Xdisplay = XOpenDisplay(NULL);
-   if (Xdisplay == NULL) {
+   Display *Xdisplay = XOpenDisplay(nullptr);
+   if (Xdisplay == nullptr) {
       return false;
    } else {
       XCloseDisplay(Xdisplay);
@@ -77,13 +78,13 @@ const char *sSDKname = "fluidsGL";
 const char *sOriginal[] =
 {
    "fluidsGL.ppm",
-   NULL
+   nullptr
 };
 
 const char *sReference[] =
 {
    "ref_fluidsGL.ppm",
-   NULL
+   nullptr
 };
 
 #define getmin(a,b) (a < b ? a : b)
@@ -107,11 +108,11 @@ void timerEvent(int value);
 // CUFFT plan handle
 cufftHandle planr2c;
 cufftHandle planc2r;
-static cData *vxfield = NULL;
-static cData *vyfield = NULL;
+static cData *vxfield = nullptr;
+static cData *vyfield = nullptr;
 
-cData *hvfield = NULL;
-cData *dvfield = NULL;
+cData *hvfield = nullptr;
+cData *dvfield = nullptr;
 static int wWidth = DIMX;
 static int wHeight = DIMY;
 
@@ -123,11 +124,17 @@ unsigned int timer;
 // Particle data
 GLuint vbo = 0;                 // OpenGL vertex buffer object
 struct cudaGraphicsResource *cuda_vbo_resource; // handles OpenGL-CUDA exchange
-static cData *particles = NULL; // particle positions in host memory
+GLuint vbo_color = 0;                 // OpenGL vertex buffer object
+struct cudaGraphicsResource *cuda_vbo_color_resource; // handles OpenGL-CUDA exchange
+static cData *particles = nullptr; // particle positions in host memory
+static GLfloat* particuleColors = nullptr;
+
+// Bitmap
+unsigned char *bitmapImage = nullptr;  //store image data
 
 static const int WindowsWidth  = 1024;
 static const int WindowsHeight = 1024;
-static int lastx = WindowsWidth/2, lasty = WindowsHeight/2, lastz = 0.f;
+static int lastx = WindowsWidth/2, lasty = WindowsHeight/2, lastz = 0;
 
 // Texture pitch
 size_t tPitch = 0; // Now this is compatible with gcc in 64-bit
@@ -138,7 +145,7 @@ int  g_iFrameToCompare = 100;
 int  g_TotalErrors     = 0;
 
 // CheckFBO/BackBuffer class objects
-CheckRender       *g_CheckRender = NULL;
+CheckRender       *g_CheckRender = nullptr;
 
 extern "C" void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r);
 extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt);
@@ -146,6 +153,96 @@ extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, f
 extern "C" void updateVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy);
 extern "C" void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt);
 
+void initParticlesFromTexture( cData *p, int dx, int dy, const std::string& filename )
+{
+   FILE *filePtr(0); //our file pointer
+   BITMAPFILEHEADER bitmapFileHeader; //our bitmap file header
+   BITMAPINFOHEADER bitmapInfoHeader;
+   DWORD imageIdx=0;  //image index counter
+   unsigned char tempRGB;  //our swap variable
+
+   if( bitmapImage == nullptr )
+   {
+
+      //open filename in read binary mode
+      fopen_s(&filePtr, filename.c_str(), "rb");
+      if (filePtr == nullptr) return;
+
+      //read the bitmap file header
+      fread(&bitmapFileHeader, sizeof(BITMAPFILEHEADER), 1, filePtr);
+
+      //verify that this is a bmp file by check bitmap id
+      if (bitmapFileHeader.bfType !=0x4D42) {
+         fclose(filePtr);
+         return;
+      }
+
+      //read the bitmap info header
+      fread(&bitmapInfoHeader, sizeof(BITMAPINFOHEADER),1,filePtr);
+
+      //move file point to the begging of bitmap data
+      fseek(filePtr, bitmapFileHeader.bfOffBits, SEEK_SET);
+
+      //allocate enough memory for the bitmap image data
+      bitmapImage = new unsigned char[bitmapInfoHeader.biSizeImage];
+
+      particuleColors = new float[bitmapInfoHeader.biSizeImage];
+
+      //verify memory allocation
+      if (!bitmapImage)
+      {
+         delete bitmapImage;
+         fclose(filePtr);
+         return;
+      }
+
+      //read in the bitmap image data
+      fread( bitmapImage, bitmapInfoHeader.biSizeImage, 1, filePtr);
+
+      //make sure bitmap image data was read
+      if (bitmapImage == nullptr)
+      {
+         fclose(filePtr);
+         return;
+      }
+      
+      /*
+      //swap the r and b values to get RGB (bitmap is BGR)
+      for (imageIdx = 0; imageIdx < bitmapInfoHeader.biSizeImage; imageIdx += 3)
+      {
+         tempRGB = bitmapImage[imageIdx];
+         bitmapImage[imageIdx] = bitmapImage[imageIdx + 2];
+         bitmapImage[imageIdx + 2] = tempRGB;
+      }
+      */
+
+      //close file and return bitmap image data
+      fclose(filePtr);
+   }
+
+   int idx = 0; //bitmapInfoHeader.biSizeImage;
+   int i, j;
+   for (i = 0; i < dy; i++) 
+   {
+      for (j = 0; j < dx; j++) 
+      {
+         unsigned char r = bitmapImage[idx+2];
+         unsigned char g = bitmapImage[idx+1];
+         unsigned char b = bitmapImage[idx+0];
+
+         float R = r/256.f;
+         float G = g/256.f;
+         float B = b/256.f;
+         particuleColors[idx+0] = R;
+         particuleColors[idx+1] = G;
+         particuleColors[idx+2] = B;
+         
+         p[i*dx+j].x = (j+0.5f)/dx;
+         p[i*dx+j].y = (i+0.5f)/dy;
+         idx+=3;
+      }
+   }
+}
 
 void simulateFluids(void)
 {
@@ -165,16 +262,19 @@ void TexFunc(void)
    glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
 
    glTexImage2D(GL_TEXTURE_2D, 0, 3, 640, 480, 0, GL_RGBA, GL_UNSIGNED_BYTE, ubImage);
-
    glBegin(GL_POLYGON);
-   glTexCoord2f(1.0, 1.0);
-   glVertex3f(0.5f-0.5,0.5+0.4, -0.1f);
-   glTexCoord2f(0.0, 1.0);
-   glVertex3f(0.5f+0.5,0.5+0.4, -0.1f);
-   glTexCoord2f(0.0, 0.0);
-   glVertex3f(0.5f+0.5,0.5-0.4, -0.1f);
-   glTexCoord2f(1.0, 0.0);
-   glVertex3f(0.5f-0.5,0.5-0.4, -0.1f);
+
+   float dx = 2.f*0.064f;
+   float dy = 2.f*0.048f;
+   float dz = 0.f;
+   glTexCoord2f(1.f, 1.f);
+   glVertex3f(0.f, dy, dz);
+   glTexCoord2f(0.0, 1.f);
+   glVertex3f(dx, dy, dz);
+   glTexCoord2f(0.f, 0.f);
+   glVertex3f(dx, 0.f, dz);
+   glTexCoord2f(1.f, 0.f);
+   glVertex3f(0.f, 0.f, dz);
    glEnd();
 
    glDisable(GL_TEXTURE_2D);
@@ -188,37 +288,27 @@ void display(void)
    }
 
    // render points from vertex buffer
-   glClear(GL_COLOR_BUFFER_BIT);
-   TexFunc();
-   glColor4f(1.0f,1.0f,1.0f,1.0f); 
-   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-   glDisable(GL_CULL_FACE); 
-   glEnable(GL_BLEND);
-
-#if 0
-   glEnable(GL_POINT_SMOOTH);
-   glPointSize(3);
-   glDisable(GL_DEPTH_TEST);
-#endif // 0
-
-   glEnableClientState(GL_VERTEX_ARRAY);    
-
-   glBindBufferARB(GL_ARRAY_BUFFER_ARB, vbo);
-   glVertexPointer(2, GL_FLOAT, 0, NULL);
-
-   glDrawArrays(GL_POINTS, 0, DS);
-   /*
-   glPushMatrix();
-   GLUquadricObj *sph1 = gluNewQuadric(); 
-   glColor3f(255.f,0.0f,0.0f); // couleur de la sphère
-   glTranslatef( lastx/1024.f, lasty/1024.f, lastz/1024.f );
-   gluSphere(sph1,0.02,30,30); 
-   glPopMatrix();
-   */
+   glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
    
+
+#if 1
+   // Draw particles
+   glEnableClientState(GL_VERTEX_ARRAY);    
+   glEnableClientState(GL_COLOR_ARRAY);
+   
+   glBindBufferARB(GL_ARRAY_BUFFER_ARB, vbo);
+   glVertexPointer(2, GL_FLOAT, 0, 0);
    glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
+   glColorPointer(3, GL_FLOAT, 0, particuleColors);
+
+   glPointSize(2.f);
+   glDrawArrays(GL_POINTS, 0, DS);
    
    glDisableClientState(GL_VERTEX_ARRAY); 
+   glDisableClientState(GL_COLOR_ARRAY);
+#endif // 0
+
+   TexFunc();
    glDisableClientState(GL_TEXTURE_COORD_ARRAY); 
    glDisable(GL_TEXTURE_2D);
 
@@ -289,18 +379,24 @@ void keyboard( unsigned char key, int x, int y)
       cudaMemcpy(dvfield, hvfield, sizeof(cData) * DS, 
          cudaMemcpyHostToDevice);
 
-      initParticles(particles, DIMX, DIMY);
+      //initParticles(particles, DIMX, DIMY);
+      initParticlesFromTexture(particles, DIMX, DIMY,"./medias/022.bmp");
 
       cudaGraphicsUnregisterResource(cuda_vbo_resource);
+      cudaGraphicsUnregisterResource(cuda_vbo_color_resource);
 
       cutilCheckMsg("cudaGraphicsUnregisterBuffer failed");
 
       glBindBufferARB(GL_ARRAY_BUFFER_ARB, vbo);
-      glBufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(cData) * DS, 
-         particles, GL_DYNAMIC_DRAW_ARB);
+      glBufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(cData) * DS, particles, GL_DYNAMIC_DRAW_ARB);
+      glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
+
+      glBindBufferARB(GL_ARRAY_BUFFER_ARB, vbo_color);
+      glBufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(GLfloat) * 3* DS, particuleColors, GL_DYNAMIC_DRAW_ARB);
       glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
 
       cudaGraphicsGLRegisterBuffer(&cuda_vbo_resource, vbo, cudaGraphicsMapFlagsNone);
+      cudaGraphicsGLRegisterBuffer(&cuda_vbo_color_resource, vbo_color, cudaGraphicsMapFlagsNone);
 
       cutilCheckMsg("cudaGraphicsGLRegisterBuffer failed");
       break;
@@ -308,62 +404,56 @@ void keyboard( unsigned char key, int x, int y)
    }
 }
 
-#if 0
-void click(int button, int updown, int x, int y) 
-{
-   lastx = x; lasty = y;
-   clicked = !clicked;
-}
-#endif //0
-
-#if 0
-void motion (int x, int y) 
-#else
 void timerEvent(int value)
-#endif // 0
 {
    Float3 positions[20];
    memset( positions, 0, 20*sizeof(Float3) );
 
-   ubImage = kinectWrapper->getVideoFrame();
-   kinectWrapper->getSkeletonPositions( positions );
+   if( kinectWrapper )
+   {
+      ubImage = kinectWrapper->getVideoFrame();
+      ubDepth = kinectWrapper->getDepthFrame();
+      kinectWrapper->getSkeletonPositions( positions );
+   }
+   
    int dx = WindowsWidth/2;
    int dy = WindowsHeight/2;
-   float x = dx-WindowsWidth*positions[NUI_SKELETON_POSITION_HAND_RIGHT].x;
-   float y = dy-WindowsHeight*positions[NUI_SKELETON_POSITION_HAND_RIGHT].y;
+   
+   // Cursor position
+   float x = (positions[NUI_SKELETON_POSITION_HAND_RIGHT].x );
+   float y = (positions[NUI_SKELETON_POSITION_HAND_RIGHT].y );
 
-   float r = positions[NUI_SKELETON_POSITION_HAND_RIGHT].z - positions[NUI_SKELETON_POSITION_HAND_LEFT].z;
+   //x *= 1000.f;
+   //y *= 1000.f;
 
-   if( r < 0.f )
+   //float r = positions[NUI_SKELETON_POSITION_HAND_RIGHT].z - positions[NUI_SKELETON_POSITION_HAND_LEFT].z;
+   //if( r < 0.f )
    {
       // Convert motion coordinates to domain
-      float fx = (lastx / (float)wWidth);        
-      float fy = (lasty / (float)wHeight);
+      float fx = x;//(x / (float)wWidth);        
+      float fy = y;//(y / (float)wHeight);
       int nx = (int)(fx * DIMX);        
       int ny = (int)(fy * DIMY);   
 
       if (nx < DIMX-FR && nx > FR-1 && ny < DIMY-FR && ny > FR-1) 
       {
-         int ddx = x - lastx;
-         int ddy = y - lasty;
+         int ddx = dx + (lastx-x);
+         int ddy = dy + (lasty-y);
          fx = ddx / (float)wWidth;
          fy = ddy / (float)wHeight;
          int spy = ny-FR;
          int spx = nx-FR;
          addForces(dvfield, DIMX, DIMY, spx, spy, FORCE * DT * fx, FORCE * DT * fy, FR);
-         lastx = x; 
+         lastx = x;
          lasty = y;
       } 
       else {
-         lastx = WindowsWidth/2; 
-         lasty = WindowsHeight/2;
+         lastx = 0.f; 
+         lasty = 0.f;
       }
    }
    glutPostRedisplay();
-#if 0
-#else
    glutTimerFunc(REFRESH_DELAY, timerEvent,0);
-#endif // 0
 }
 
 void reshape(int x, int y) {
@@ -379,10 +469,8 @@ void reshape(int x, int y) {
 
 void cleanup(void) 
 {
-   delete kinectWrapper;
-   delete ubImage;
-
    cudaGraphicsUnregisterResource(cuda_vbo_resource);
+   cudaGraphicsUnregisterResource(cuda_vbo_color_resource);
 
    unbindTexture();
    deleteTexture();
@@ -396,15 +484,28 @@ void cleanup(void)
 
    glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
    glDeleteBuffersARB(1, &vbo);
+   glDeleteBuffersARB(1, &vbo_color);
+
+   delete kinectWrapper;
+   kinectWrapper = nullptr;
+   delete ubImage;
+   delete ubDepth;
+
+   delete bitmapImage;
+   delete particuleColors;
 
    cutilCheckError(cutDeleteTimer(timer));  
 }
 
 int initGL(int *argc, char **argv)
 {
+   // Kinect Image
    size_t len(640*480*4);
    ubImage = new GLubyte[len];
-   memset( ubImage, 0, len ); 
+
+   // Kinect Image
+   len = 320*240*2;
+   ubDepth = new GLubyte[len];
 
    if (IsOpenGLAvailable(sSDKname)) {
       fprintf( stderr, "   OpenGL device is Available\n");
@@ -415,7 +516,7 @@ int initGL(int *argc, char **argv)
    }
 
    glutInit(argc, argv);
-   glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
+   glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);
    glutInitWindowSize(WindowsWidth, WindowsHeight);
    glutCreateWindow("Compute Stable Fluids");
    glutDisplayFunc(display);
@@ -518,9 +619,14 @@ int main(int argc, char** argv)
 
    // Create particle array
    particles = (cData*)malloc(sizeof(cData) * DS);
-   memset(particles, 0, sizeof(cData) * DS);   
+   memset(particles, 0, sizeof(cData) * DS);
 
-   initParticles(particles, DIMX, DIMY); 
+   // Create color array
+   particles = (cData*)malloc(sizeof(cData) * DS);
+   memset(particles, 0, sizeof(cData) * DS);
+
+   //initParticles(particles, DIMX, DIMY);
+   initParticlesFromTexture(particles, DIMX, DIMY,"./medias/022.bmp");
 
    // Create CUFFT transform plan configuration
    cufftPlan2d(&planr2c, DIMX, DIMY, CUFFT_R2C);
@@ -532,15 +638,22 @@ int main(int argc, char** argv)
 
    glGenBuffersARB(1, &vbo);
    glBindBufferARB(GL_ARRAY_BUFFER_ARB, vbo);
-   glBufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(cData) * DS, 
-      particles, GL_DYNAMIC_DRAW_ARB);
-
+   glBufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(cData) * DS, particles, GL_DYNAMIC_DRAW_ARB);
    glGetBufferParameterivARB(GL_ARRAY_BUFFER_ARB, GL_BUFFER_SIZE_ARB, &bsize); 
    if (bsize != (sizeof(cData) * DS))
       goto EXTERR;
    glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
 
+   glGenBuffersARB(1, &vbo_color);
+   glBindBufferARB(GL_ARRAY_BUFFER_ARB, vbo_color);
+   glBufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(GLfloat)*3*DS, particuleColors, GL_DYNAMIC_DRAW_ARB);
+   glGetBufferParameterivARB(GL_ARRAY_BUFFER_ARB, GL_BUFFER_SIZE_ARB, &bsize); 
+   if (bsize != (sizeof(GLfloat)*3*DS))
+      goto EXTERR;
+   glBindBufferARB(GL_ARRAY_BUFFER_ARB,0);
+
    cutilSafeCall(cudaGraphicsGLRegisterBuffer(&cuda_vbo_resource, vbo, cudaGraphicsMapFlagsNone));
+   cutilSafeCall(cudaGraphicsGLRegisterBuffer(&cuda_vbo_color_resource, vbo_color, cudaGraphicsMapFlagsNone));
    cutilCheckMsg("cudaGraphicsGLRegisterBuffer failed");
 
    // --------------------------------------------------------------------------------

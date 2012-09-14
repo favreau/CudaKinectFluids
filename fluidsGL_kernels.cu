@@ -261,6 +261,21 @@ advectParticles_k(cData *part, cData *v, int dx, int dy,
     } // If this thread is inside the domain in X
 }
 
+// This method updates the particles by moving particle positions
+// according to the velocity field and time step. That is, for each
+// particle: p(t+1) = p(t) + dt * v(p(t)).  
+__global__ void 
+feelTheAttraction(cData *v, int dx, int dy, float dt) 
+{
+    int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
+    int gtidy = blockIdx.y * blockDim.y + threadIdx.y;
+
+    int index = gtidy*(blockIdx.x * blockDim.x) + gtidx;
+    v[index].x += dx/dt;
+    v[index].y += dy/dt;
+}
+
+
 
 // These are the external function calls necessary for launching fluid simuation
 extern "C"
@@ -268,7 +283,8 @@ void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, i
 
     dim3 tids(2*r+1, 2*r+1);
     
-    addForces_k<<<1, tids>>>(v, dx, dy, spx, spy, fx, fy, r, tPitch);
+    //addForces_k<<<1, tids>>>(v, dx, dy, spx, spy, fx, fy, r, tPitch);
+    feelTheAttraction<<<1, tids>>>(v, fx, fy, r);
     cutilCheckMsg("addForces_k failed.");
 }
 
@@ -334,3 +350,4 @@ void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt)
 
     cutilCheckMsg("cudaGraphicsUnmapResources failed");
 }
+

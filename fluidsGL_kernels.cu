@@ -21,22 +21,21 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <windows.h>
-#include "cutil_inline.h"
 
-// CUDA FFT Libraries
-#include <cufft.h>
+#include <cuda_runtime.h>
+#include <cufft.h>          // CUDA FFT Libraries
+#include <helper_cuda.h>    // Helper functions for CUDA Error handling
 
-// OpenGL Graphics includes
-#include <GL/glew.h>
-#if defined(__APPLE__) || defined(MACOSX)
-#include <GLUT/glut.h>
-#else
-#include <GL/freeglut.h>
-#endif
-
+ // OpenGL Graphics includes
+#define HELPERGL_EXTERN_GL_FUNC_IMPLEMENTATION
+#include <helper_gl.h>
+ 
 // FluidsGL CUDA kernel definitions
 #include "fluidsGL_kernels.cuh"
+
+// Kinect
+#include <windows.h>
+#include <nuiapi.h>
 
 // Texture reference for reading velocity field
 texture<float2, 2> texref;
@@ -62,12 +61,12 @@ void setupTexture(int x, int y) {
    cudaChannelFormatDesc desc = cudaCreateChannelDesc<float2>();
 
    cudaMallocArray(&array, &desc, y, x);
-   cutilCheckMsg("cudaMalloc failed");
+   //cutilCheckMsg("cudaMalloc failed");
 }
 
 void bindTexture(void) {
    cudaBindTextureToArray(texref, array);
-   cutilCheckMsg("cudaBindTexture failed");
+   //cutilCheckMsg("cudaBindTexture failed");
 }
 
 void unbindTexture(void) {
@@ -76,14 +75,14 @@ void unbindTexture(void) {
 
 void updateTexture(cData *data, size_t wib, size_t h, size_t pitch) {
    cudaMemcpy2DToArray(array, 0, 0, data, pitch, wib, h, cudaMemcpyDeviceToDevice);
-   cutilCheckMsg("cudaMemcpy failed"); 
+   //cutilCheckMsg("cudaMemcpy failed"); 
 }
 
 void deleteTexture(void) {
    cudaFreeArray(array);
 }
 
-#if 0
+#if 1
 // Note that these kernels are designed to work with arbitrary 
 // domain sizes, not just domains that are multiples of the tile
 // size. Therefore, we have extra code that checks to make sure
@@ -114,33 +113,40 @@ __global__ void
 // trace velocity vectors back in time to update each grid cell.
 // That is, v(x,t+1) = v(p(x,-dt),t). Here we perform bilinear
 // interpolation in the velocity space.
-__global__ void 
-   advectVelocity_k(cData *v, float *vx, float *vy,
-   int dx, int pdx, int dy, float dt, int lb) {
+__global__ void
+advectVelocity_k(cData *v, float *vx, float *vy,
+	int dx, int pdx, int dy, float dt, int lb)
+{
 
-      int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
-      int gtidy = blockIdx.y * (lb * blockDim.y) + threadIdx.y * lb;
-      int p;
+	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
+	int gtidy = blockIdx.y * (lb * blockDim.y) + threadIdx.y * lb;
+	int p;
 
-      cData vterm, ploc;
-      float vxterm, vyterm;
-      // gtidx is the domain location in x for this thread
-      if (gtidx < dx) {
-         for (p = 0; p < lb; p++) {
-            // fi is the domain location in y for this thread
-            int fi = gtidy + p;
-            if (fi < dy) {
-               int fj = fi * pdx + gtidx;
-               vterm = tex2D(texref, (float)gtidx, (float)fi);
-               ploc.x = (gtidx + 0.5f) - (dt * vterm.x * dx);
-               ploc.y = (fi + 0.5f) - (dt * vterm.y * dy);
-               vterm = tex2D(texref, ploc.x, ploc.y);
-               vxterm = vterm.x; vyterm = vterm.y; 
-               vx[fj] = vxterm;
-               vy[fj] = vyterm; 
-            }
-         }
-      }
+	cData vterm, ploc;
+	float vxterm, vyterm;
+
+	// gtidx is the domain location in x for this thread
+	if (gtidx < dx)
+	{
+		for (p = 0; p < lb; p++)
+		{
+			// fi is the domain location in y for this thread
+			int fi = gtidy + p;
+
+			if (fi < dy)
+			{
+				int fj = fi * pdx + gtidx;
+				vterm = tex2D(texref, (float)gtidx, (float)fi);
+				ploc.x = (gtidx + 0.5f) - (dt * vterm.x * dx);
+				ploc.y = (fi + 0.5f) - (dt * vterm.y * dy);
+				vterm = tex2D(texref, ploc.x, ploc.y);
+				vxterm = vterm.x;
+				vyterm = vterm.y;
+				vx[fj] = vxterm;
+				vy[fj] = vyterm;
+			}
+		}
+	}
 }
 
 // This method performs velocity diffusion and forces mass conservation 
@@ -313,7 +319,7 @@ __global__ void
       float3 length;
       length.x = (position.x - particules[index].x+0.5f);
       length.y = (position.y - particules[index].y+0.5f);
-      length.z = (position.z - particules[index].z+0.5f);
+      //length.z = (position.z - particules[index].z+0.5f);
 
       float l = (depthPosition+sqrt(length.x*length.x + length.y*length.y + length.z*length.z))/param;
 
@@ -351,10 +357,10 @@ extern "C" void feelTheAttraction(
    cData *particules, int dx, int dy, float3 position, float timer, float param ) 
 { 
    cData *p;
-   cutilSafeCall(cudaGraphicsMapResources(1, &cuda_vbo_resource, 0));
+   checkCudaErrors(cudaGraphicsMapResources(1, &cuda_vbo_resource, 0));
    size_t num_bytes; 
-   cutilSafeCall(cudaGraphicsResourceGetMappedPointer((void **)&p, &num_bytes, cuda_vbo_resource));
-   cutilCheckMsg("cudaGraphicsResourceGetMappedPointer failed");
+   checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&p, &num_bytes, cuda_vbo_resource));
+   //cutilCheckMsg("cudaGraphicsResourceGetMappedPointer failed");
 
    dim3 gridSize(512,1,1);
    dim3 blockSize(dx*dy/gridSize.x,1,1);
@@ -362,30 +368,29 @@ extern "C" void feelTheAttraction(
    feelTheAttraction_k<<<gridSize, blockSize>>>(p,position,timer, param, d_kinectDepth);
    //cutilCheckMsg("feelTheAttraction_k failed.");
 
-   cutilSafeCall(cudaGraphicsUnmapResources(1, &cuda_vbo_resource, 0));
+   checkCudaErrors(cudaGraphicsUnmapResources(1, &cuda_vbo_resource, 0));
 
-   cutilCheckMsg("cudaGraphicsUnmapResources failed");
+   //cutilCheckMsg("cudaGraphicsUnmapResources failed");
 }
 
 extern "C" void h2d_kinect( BYTE* kinectVideo, BYTE* kinectDepth )
 {
-   //cutilSafeCall(cudaMemcpy( d_kinectVideo, kinectVideo, gKinectVideoWidth*gKinectVideoHeight*gKinectVideo*sizeof(BYTE), cudaMemcpyHostToDevice ));
-   cutilSafeCall(cudaMemcpy( d_kinectDepth, kinectDepth, gKinectDepthWidth*gKinectDepthHeight*gKinectDepth*sizeof(BYTE), cudaMemcpyHostToDevice ));
+   //checkCudaErrors(cudaMemcpy( d_kinectVideo, kinectVideo, gKinectVideoWidth*gKinectVideoHeight*gKinectVideo*sizeof(BYTE), cudaMemcpyHostToDevice ));
+   checkCudaErrors(cudaMemcpy( d_kinectDepth, kinectDepth, gKinectDepthWidth*gKinectDepthHeight*gKinectDepth*sizeof(BYTE), cudaMemcpyHostToDevice ));
 }
 
 extern "C" void initialize_scene()
 {
-   //cutilSafeCall(cudaMalloc( (void**)&d_kinectVideo, gKinectVideoWidth*gKinectVideoHeight*gKinectVideo*sizeof(BYTE)));
-   cutilSafeCall(cudaMalloc( (void**)&d_kinectDepth, gKinectDepthWidth*gKinectDepthHeight*gKinectDepth*sizeof(BYTE)));
+   //checkCudaErrors(cudaMalloc( (void**)&d_kinectVideo, gKinectVideoWidth*gKinectVideoHeight*gKinectVideo*sizeof(BYTE)));
+   checkCudaErrors(cudaMalloc( (void**)&d_kinectDepth, gKinectDepthWidth*gKinectDepthHeight*gKinectDepth*sizeof(BYTE)));
 }
 
 extern "C" void finalize_scene()
 {
-   //cutilSafeCall(cudaFree( d_kinectVideo ));
-   cutilSafeCall(cudaFree( d_kinectDepth ));
+   //checkCudaErrors(cudaFree( d_kinectVideo ));
+   checkCudaErrors(cudaFree( d_kinectDepth ));
 }
 
-#if 0
 // These are the external function calls necessary for launching fluid simuation
 extern "C"
    void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r) { 
@@ -393,7 +398,7 @@ extern "C"
       dim3 tids(2*r+1, 2*r+1);
 
       addForces_k<<<1, tids>>>(v, dx, dy, spx, spy, fx, fy, r, tPitch);
-      cutilCheckMsg("addForces_k failed.");
+      //cutilCheckMsg("addForces_k failed.");
 }
 
 extern "C"
@@ -406,7 +411,7 @@ extern "C"
    updateTexture(v, DIMX*sizeof(cData), DIMX, tPitch);
    advectVelocity_k<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, dt, TILEY/TIDSY);
 
-   cutilCheckMsg("advectVelocity_k failed.");
+   //cutilCheckMsg("advectVelocity_k failed.");
 }
 
 extern "C"
@@ -421,7 +426,7 @@ extern "C"
    uint3 tids = make_uint3(TIDSX, TIDSY, 1);
 
    diffuseProject_k<<<grid, tids>>>(vx, vy, dx, dy, dt, visc, TILEY/TIDSY);
-   cutilCheckMsg("diffuseProject_k failed.");
+   //cutilCheckMsg("diffuseProject_k failed.");
 
    // Inverse FFT
    cufftExecC2R(planc2r, (cufftComplex*)vx, (cufftReal*)vx); 
@@ -435,7 +440,7 @@ extern "C"
    dim3 tids(TIDSX, TIDSY);
 
    updateVelocity_k<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, TILEY/TIDSY, tPitch);
-   cutilCheckMsg("updateVelocity_k failed.");
+   //cutilCheckMsg("updateVelocity_k failed.");
 }
 
 extern "C"
@@ -445,16 +450,16 @@ extern "C"
    dim3 tids(TIDSX, TIDSY);
 
    cData *p;
-   cutilSafeCall(cudaGraphicsMapResources(1, &cuda_vbo_resource, 0));
+   checkCudaErrors(cudaGraphicsMapResources(1, &cuda_vbo_resource, 0));
    size_t num_bytes; 
-   cutilSafeCall(cudaGraphicsResourceGetMappedPointer((void **)&p, &num_bytes,  
+   checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&p, &num_bytes,  
       cuda_vbo_resource));
-   cutilCheckMsg("cudaGraphicsResourceGetMappedPointer failed");
+   //cutilCheckMsg("cudaGraphicsResourceGetMappedPointer failed");
 
    advectParticles_k<<<grid, tids>>>(p, v, dx, dy, dt, TILEY/TIDSY, tPitch);
-   cutilCheckMsg("advectParticles_k failed.");
+   //cutilCheckMsg("advectParticles_k failed.");
 
-   cutilSafeCall(cudaGraphicsUnmapResources(1, &cuda_vbo_resource, 0));
+   checkCudaErrors(cudaGraphicsUnmapResources(1, &cuda_vbo_resource, 0));
 
-   cutilCheckMsg("cudaGraphicsUnmapResources failed");
+   //cutilCheckMsg("cudaGraphicsUnmapResources failed");
 }

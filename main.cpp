@@ -181,14 +181,6 @@ extern "C" void initialize_scene();
 extern "C" void h2d_kinect(BYTE *kinectVideo, BYTE *kinectDepth);
 extern "C" void finalize_scene();
 
-#if 0
-extern "C" void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r);
-extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt);
-extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, float visc);
-extern "C" void updateVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy);
-extern "C" void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt);
-#endif // 0
-
 void initParticlesFromTexture(cData *p, int dx, int dy, const std::string &filename)
 {
     FILE *filePtr(0);                  // our file pointer
@@ -609,21 +601,6 @@ int initGL(int *argc, char **argv)
 
     glutMouseFunc(mouse);
     glutMotionFunc(motion);
-
-    /*
-    // viewport
-    glClearColor(0.0, 0.0, 0.0, 1.0);
-    glDisable(GL_DEPTH_TEST);
-    glViewport(0, 0, DIMX, DIMY);
-
-    // projection
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(100.0, (GLfloat)DIMX / (GLfloat) DIMY, 0.1, 5.0);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    */
 
     // glutFullScreen();
     glutTimerFunc(REFRESH_DELAY, timerEvent, 0);
